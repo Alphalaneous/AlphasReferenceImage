@@ -31,7 +31,7 @@ class $modify(MyCustomizeObjectLayer, CustomizeObjectLayer) {
 		auto fields = m_fields.self();
 		if (auto textObject = typeinfo_cast<TextGameObject*>(m_targetObject)) {
 			auto pair = splitIntoPair(textObject->m_text);
-			if (pair.first == "image") {
+			if (pair.first == "image" || pair.first == "image2") {
 				fields->m_isImageObject = true;
 				if (!m_textButton) return;
 				if (auto spr = m_textButton->getChildByType<ButtonSprite*>(0)) {
@@ -54,7 +54,7 @@ class $modify(MyCustomizeObjectLayer, CustomizeObjectLayer) {
 				if (!*result) return;
 				auto path = result->unwrap();
 				if (auto textObject = typeinfo_cast<TextGameObject*>(m_targetObject)) {
-					textObject->updateTextObject("image:" + utils::string::pathToString(path), false);
+					textObject->updateTextObject("image2:" + utils::base64::encode(utils::string::pathToString(path)), false);
 				}
 			});
 		} else {
@@ -103,7 +103,6 @@ class $modify(MyTextGameObject, TextGameObject) {
 	}
 
 	void setAttributes() {
-		log::info("set attr");
 		auto fields = m_fields.self();
 		if (auto node = getChildByID("error-node"_spr)) {
 			node->removeFromParent();
@@ -118,33 +117,83 @@ class $modify(MyTextGameObject, TextGameObject) {
 	}
 
 	void setupCustomSprite() {
-		auto fields = m_fields.self();
-		if (fields->m_spr) fields->m_spr->removeFromParent();
+		auto pair = splitIntoPair(m_text);
+
+		if (pair.first == "image") {
+			if (!setupInitial(pair.second)) return;
+			setupImageBackwardsCompat(pair.second);
+		}
+		else if (pair.first == "image2") {
+			if (!setupInitial(pair.second)) return;
+			setupImage(pair.second);
+		}
+	}
+
+	bool setupInitial(const std::string& path) {
 		if (LevelEditorLayer::get()) {
 			m_hasSpecialChild = true;
 		}
-
-		if (auto node = getChildByID("error-node"_spr)) {
-			node->removeFromParent();
+		if (!LevelEditorLayer::get()) {
+			updateTextObject("[Path Hidden, Delete Object Before Upload!]", false);
+			return false;
 		}
-
-		auto pair = splitIntoPair(m_text);
-		if (pair.first == "image") {
-			if (!LevelEditorLayer::get()) {
-				updateTextObject("[Path Hidden, Delete Object Before Upload!]", false);
-				return;
+		else {
+			for (auto child : CCArrayExt<CCNode*>(getChildren())) {
+				child->setVisible(false);
 			}
-			else {
-				for (auto child : CCArrayExt<CCNode*>(getChildren())) {
-					child->setVisible(false);
+		}
+		
+		if (path.empty()) return false;
+		return true;
+	}
+
+
+	void setupImage(const std::string& path) {
+		auto fields = m_fields.self();
+		if (fields->m_spr) fields->m_spr->removeFromParent();
+
+		auto decodedRes = utils::base64::decodeString(path);
+		if (!decodedRes) return;
+
+		auto u16Res = utils::string::utf8ToUtf16(decodedRes.unwrap());
+		if (!u16Res) return;
+
+		std::filesystem::path decoded = u16Res.unwrap();
+
+		log::info("decoded: {}", decoded);
+		
+		if (std::filesystem::exists(decoded) && !std::filesystem::is_directory(decoded)) {
+
+			auto fields = m_fields.self();
+			fields->m_spr = LazySprite::create({60, 60}, true);
+			fields->m_spr->setZOrder(1);
+			fields->m_spr->setPosition(getContentSize()/2);
+			addChild(fields->m_spr);
+
+			fields->m_spr->setLoadCallback([this](Result<> res) {
+				if (res) setAttributes();
+				else {
+					for (auto child : CCArrayExt<CCNode*>(getChildren())) {
+						child->setVisible(true);
+					}
+					auto fields = m_fields.self();
+					fields->m_spr->removeFromParent();
+					fields->m_spr = nullptr;
+					onImageFail();
 				}
-			}
+			});
+
+			fields->m_spr->loadFromFile(decoded, LazySprite::Format::kFmtUnKnown, true);
 		}
-		else return;
+		else {
+			onImageFail();
+		}
+	}
 
-		if (pair.second.empty()) return;
-
-		auto path = std::filesystem::path(pair.second);
+	void setupImageBackwardsCompat(const std::string& path) {
+		auto fields = m_fields.self();
+		if (fields->m_spr) fields->m_spr->removeFromParent();
+		
 		if (std::filesystem::exists(path) && !std::filesystem::is_directory(path)) {
 
 			auto fields = m_fields.self();
@@ -221,7 +270,7 @@ class $modify(MyEditorUI, EditorUI) {
 				posX = localPosAR.x;
 				posY = localPosAR.y - m_toolbarHeight/2;
 			}
-			std::string obj = fmt::format("1,914,2,{},3,{},31,{}", posX, posY, utils::base64::encode("image:" + utils::string::pathToString(path)));
+			std::string obj = fmt::format("1,914,2,{},3,{},31,{}", posX, posY, utils::base64::encode("image2:" + utils::base64::encode(utils::string::pathToString(path))));
 			pasteObjects(obj, true, true);
 			updateButtons();
 			updateObjectInfoLabel();
